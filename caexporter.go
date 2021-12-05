@@ -2,35 +2,46 @@ package main
 
 import (
 	"context"
+	"flag"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/version"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-var (
-	up = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "up",
-		Help: "is caexporter up",
-	})
+const namespace = "cluster_autoscaler"
 
-	lastActivity = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "cluster_autoscaler_last_activity",
-			Help: "LastProbeTime as reported in cluster-autoscaler-status configmap",
-		}, []string{"activity"},
+var (
+	webListenAddress        = flag.String("web.listen-address", ":8080", "Address to listen on for web interface and telemetry")
+	webMetricsPath          = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
+	collectorRequestTimeout = flag.Int("collector.request-timeout", 10, "Kubernetes API request timeout in seconds")
+	logDebug                = flag.Bool("log.debug", false, "sets log level to debug")
+
+	desc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "", "last_activity"),
+		"LastProbeTime as reported in cluster-autoscaler-status configmap",
+		[]string{"activity"},
+		nil,
 	)
 )
 
 type Collector struct {
 	kubeClient *kubernetes.Clientset
+	mu         *sync.Mutex
 	regex      *regexp.Regexp
+}
+
+func init() {
+	prometheus.MustRegister(version.NewCollector(namespace))
 }
 
 func newCollector() *Collector {
@@ -53,35 +64,24 @@ func newCollector() *Collector {
 
 	c := &Collector{
 		kubeClient: clientset,
+		mu:         &sync.Mutex{},
 		regex:      rx,
 	}
 
 	return c
 }
 
-func main() {
-	r := prometheus.NewRegistry()
-	r.MustRegister(newCollector())
-
-	http.Handle("/metrics", promhttp.HandlerFor(r, promhttp.HandlerOpts{}))
-	log.Info().Msg("Beginning to serve on port :8080")
-	log.Fatal().Err(http.ListenAndServe(":8080", nil))
-}
-
-// Describe implements prometheus.Collector
-func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
-	ch <- up.Desc()
-	lastActivity.Describe(ch)
-}
-
 // Collect implements prometheus.Collector
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
-	up.Set(1)
-	ch <- up
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(context.TODO(), "cluster-autoscaler-status", metav1.GetOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*collectorRequestTimeout*int(time.Second)))
+	defer cancel()
+
+	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "cluster-autoscaler-status", metav1.GetOptions{})
 	if err != nil {
-		log.Fatal().Err(err)
+		log.Err(err)
 	}
 
 	cmData := cm.Data["status"]
@@ -98,11 +98,49 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		layout := "2006-01-02 15:04:05 -0700 MST"
 		activityTime, err := time.Parse(layout, val)
 		if err != nil {
-			log.Fatal().Err(err)
+			log.Err(err)
 		}
 
-		lastActivity.With(prometheus.Labels{"activity": act}).Set(float64(activityTime.Unix()))
+		metric, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, float64(activityTime.Unix()), act)
+		if err != nil {
+			log.Err(err)
+		}
 
-		ch <- lastActivity.With(prometheus.Labels{"activity": act})
+		ch <- metric
 	}
+}
+
+// Describe implements prometheus.Collector
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
+	prometheus.DescribeByCollect(c, ch)
+}
+
+func main() {
+	flag.Parse()
+
+	// log configs
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	if *logDebug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+
+	prometheus.MustRegister(newCollector())
+
+	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		//nolint:errcheck
+		w.Write([]byte(`<html>
+             <head><title>CAExporter Exporter</title></head>
+             <body>
+             <h1>CAExporter Exporter</h1>
+             <p><a href='` + *webMetricsPath + `'>Metrics</a></p>
+             </body>
+             </html>`))
+	})
+
+	log.Info().Msg("Beginning to serve on port " + *webListenAddress)
+	log.Fatal().Err(http.ListenAndServe(*webListenAddress, nil))
 }
