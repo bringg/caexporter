@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"net/http"
 	"regexp"
 	"sync"
@@ -25,6 +26,7 @@ var (
 	webMetricsPath          = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics")
 	collectorRequestTimeout = flag.Int("collector.request-timeout", 10, "Kubernetes API request timeout in seconds")
 	logDebug                = flag.Bool("log.debug", false, "sets log level to debug")
+	appVersion              = flag.Bool("version", false, "prints the exporter version")
 
 	desc = prometheus.NewDesc(
 		prometheus.BuildFQName(namespace, "", "last_activity"),
@@ -82,6 +84,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "cluster-autoscaler-status", metav1.GetOptions{})
 	if err != nil {
 		log.Err(err)
+		return
 	}
 
 	cmData := cm.Data["status"]
@@ -94,11 +97,13 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		"scaleDown": cw[2][1],
 	}
 
+	dateLayout := "2006-01-02 15:04:05 -0700 MST"
+
 	for act, val := range res {
-		layout := "2006-01-02 15:04:05 -0700 MST"
-		activityTime, err := time.Parse(layout, val)
+		activityTime, err := time.Parse(dateLayout, val)
 		if err != nil {
 			log.Err(err)
+			return
 		}
 
 		metric, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, float64(activityTime.Unix()), act)
@@ -117,6 +122,11 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 
 func main() {
 	flag.Parse()
+
+	if *appVersion {
+		fmt.Println(version.Version)
+		return
+	}
 
 	// log configs
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix

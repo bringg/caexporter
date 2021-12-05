@@ -1,6 +1,7 @@
 # Cluster Autoscaler Exporter
 
 A Prometheus Exporter for reporting the last activity of the Kubernetes Cluster Autoscaler, gathered from the CAS config map.
+Please note that this exporter is needed only in clusters that don't directly expose CAS metrics (GKE for example), using it otherwise will result in duplicate metrics.
 
 ## Usage
 
