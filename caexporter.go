@@ -83,7 +83,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "cluster-autoscaler-status", metav1.GetOptions{})
 	if err != nil {
-		log.Err(err)
+		log.Error().Err(err).Msg("")
 		return
 	}
 
@@ -102,13 +102,13 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	for act, val := range res {
 		activityTime, err := time.Parse(dateLayout, val)
 		if err != nil {
-			log.Err(err)
+			log.Error().Err(err).Msg("")
 			return
 		}
 
 		metric, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, float64(activityTime.Unix()), act)
 		if err != nil {
-			log.Err(err)
+			log.Error().Err(err).Msg("")
 		}
 
 		ch <- metric
@@ -152,5 +152,5 @@ func main() {
 	})
 
 	log.Info().Msg("Beginning to serve on port " + *webListenAddress)
-	log.Fatal().Err(http.ListenAndServe(*webListenAddress, nil))
+	log.Fatal().Err(http.ListenAndServe(*webListenAddress, nil)).Msg("")
 }
