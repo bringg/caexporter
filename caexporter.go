@@ -34,6 +34,11 @@ var (
 		[]string{"activity"},
 		nil,
 	)
+
+	up = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "up",
+		Help: "The up metric is set to 1 per each successful scrape. It is set to 0 otherwise",
+	})
 )
 
 type Collector struct {
@@ -43,7 +48,8 @@ type Collector struct {
 }
 
 func init() {
-	prometheus.MustRegister(version.NewCollector(namespace))
+	prometheus.MustRegister(version.NewCollector(namespace), up)
+	up.Set(1)
 }
 
 func newCollector() *Collector {
@@ -83,11 +89,15 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "cluster-autoscaler-status", metav1.GetOptions{})
 	if err != nil {
+		up.Set(0)
 		log.Error().Err(err).Msg("")
 		return
 	}
 
 	cmData := cm.Data["status"]
+	if len(cmData) == 0{
+		up.Set(0)
+	}
 
 	cw := c.regex.FindAllStringSubmatch(cmData, 3)
 
@@ -140,6 +150,7 @@ func main() {
 	prometheus.MustRegister(newCollector())
 
 	http.Handle("/metrics", promhttp.Handler())
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {w.Write([]byte(`ok`))})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		//nolint:errcheck
 		w.Write([]byte(`<html>
