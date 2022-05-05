@@ -95,7 +95,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	cmData := cm.Data["status"]
-	if len(cmData) == 0{
+	if len(cmData) == 0 {
 		up.Set(0)
 	}
 
