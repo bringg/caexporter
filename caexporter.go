@@ -105,7 +105,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	if len(res) != 3 {
-		println("Required events not found")
+		log.Error().Msg("Couldn't extract required data from the ConfigMap")
 		scrapeError.Set(1)
 		return
 	}
