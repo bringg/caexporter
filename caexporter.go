@@ -34,6 +34,12 @@ var (
 		[]string{"activity"},
 		nil,
 	)
+
+	scrapeError = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace, 
+		Name: "scrape_error",
+		Help: "Set to 0 for successful scrape, or 1 otherwise",	
+	})
 )
 
 type Collector struct {
@@ -43,7 +49,7 @@ type Collector struct {
 }
 
 func init() {
-	prometheus.MustRegister(version.NewCollector(namespace))
+	prometheus.MustRegister(version.NewCollector(namespace), scrapeError)
 }
 
 func newCollector() *Collector {
@@ -84,6 +90,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps("kube-system").Get(ctx, "cluster-autoscaler-status", metav1.GetOptions{})
 	if err != nil {
 		log.Error().Err(err).Msg("")
+		scrapeError.Set(1)
 		return
 	}
 
@@ -97,12 +104,19 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		"scaleDown": cw[2][1],
 	}
 
+	if len(res) != 3 {
+		log.Error().Msg("Couldn't extract required data from the ConfigMap")
+		scrapeError.Set(1)
+		return
+	}
+
 	dateLayout := "2006-01-02 15:04:05 -0700 MST"
 
 	for act, val := range res {
 		activityTime, err := time.Parse(dateLayout, val)
 		if err != nil {
 			log.Error().Err(err).Msg("")
+			scrapeError.Set(1)
 			return
 		}
 
@@ -111,6 +125,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			log.Error().Err(err).Msg("")
 		}
 
+		scrapeError.Set(0)
 		ch <- metric
 	}
 }
