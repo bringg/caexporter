@@ -36,9 +36,9 @@ var (
 	)
 
 	scrapeError = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace, 
-		Name: "scrape_error",
-		Help: "Set to 0 for successful scrape, or 1 otherwise",	
+		Namespace: namespace,
+		Name:      "scrape_error",
+		Help:      "Set to 0 for successful scrape, or 1 otherwise",
 	})
 )
 
@@ -61,14 +61,17 @@ func newCollector() *Collector {
 		log.Fatal().Err(err).Msg("")
 	}
 
-	log.Info().Msg("creating kubernetes clientset")
+	log.Info().Msg("Creating kubernetes clientset")
 
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		log.Fatal().Err(err).Msg("")
 	}
 
-	rx := regexp.MustCompile(`(?s)LastProbeTime:\s*(.{39})`)
+	// we're looking for lines that look like -
+	// LastProbeTime:      2022-09-11 11:21:27.046154458 +0000 UTC m=+25121.073170634
+	// but without the m=... part
+	rx := regexp.MustCompile(`(?s)LastProbeTime:\s*([\d\-]*\s[\d\:\.]*\s[\+\d]*\sUTC)`)
 
 	c := &Collector{
 		kubeClient: clientset,
@@ -97,6 +100,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	cmData := cm.Data["status"]
 
 	cw := c.regex.FindAllStringSubmatch(cmData, 3)
+	// nil means there's no regex match on the returned data,
+	// for example the configmap is still in initialized phase
+	if cw == nil {
+		log.Info().Msg("Can't match regex pattern on the returned data")
+		log.Debug().Msgf("Received configmap status %s, regex pattern is %s", cmData, c.regex.String())
+		scrapeError.Set(1)
+		return
+	}
 
 	res := map[string]string{
 		"main":      cw[0][1],
@@ -146,11 +157,13 @@ func main() {
 	// log configs
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if *logDebug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	} else {
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
+
+	// adds line location to the caller field of the event
+	log.Logger = log.With().Caller().Logger()
 
 	prometheus.MustRegister(newCollector())
 
