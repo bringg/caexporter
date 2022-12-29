@@ -11,9 +11,8 @@ RUN go build -ldflags="-X github.com/prometheus/common/version.Version=${caexpor
 FROM alpine:3.16
 LABEL maintainer "Bringg DevOps <devops@bringg.com>"
 
-RUN apk --no-cache -X https://dl-cdn.alpinelinux.org/alpine/edge/testing add gosu
+USER nobody
 
 COPY --from=builder /opt/caexporter/caexporter /usr/local/bin
 
-ENTRYPOINT ["gosu", "nobody"]
-CMD ["caexporter"]
+ENTRYPOINT ["caexporter"]
