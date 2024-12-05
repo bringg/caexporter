@@ -1,4 +1,4 @@
-VERSION := 0.0.4
+VERSION := 0.0.5
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
 GIT_BRANCH := $(shell git branch --show-current)
 

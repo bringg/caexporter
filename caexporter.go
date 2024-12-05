@@ -5,15 +5,16 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	collectorsVersion "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -45,11 +46,28 @@ var (
 type Collector struct {
 	kubeClient *kubernetes.Clientset
 	mu         *sync.Mutex
-	regex      *regexp.Regexp
+}
+
+// ClusterWide represents the structure of the status.clusterWide key in the cluster-autoscaler-status ConfigMap
+type ClusterWide struct {
+	Health struct {
+		LastProbeTime string `yaml:"lastProbeTime"`
+	} `yaml:"health"`
+	ScaleUp struct {
+		LastProbeTime string `yaml:"lastProbeTime"`
+	} `yaml:"scaleUp"`
+	ScaleDown struct {
+		LastProbeTime string `yaml:"lastProbeTime"`
+	} `yaml:"scaleDown"`
+}
+
+// Status represents the structure of the status key in the cluster-autoscaler-status ConfigMap
+type Status struct {
+	ClusterWide ClusterWide `yaml:"clusterWide"`
 }
 
 func init() {
-	prometheus.MustRegister(version.NewCollector(namespace), scrapeError)
+	prometheus.MustRegister(collectorsVersion.NewCollector(namespace), scrapeError)
 }
 
 func newCollector() *Collector {
@@ -68,15 +86,9 @@ func newCollector() *Collector {
 		log.Fatal().Err(err).Msg("")
 	}
 
-	// we're looking for lines that look like -
-	// LastProbeTime:      2022-09-11 11:21:27.046154458 +0000 UTC m=+25121.073170634
-	// but without the m=... part
-	rx := regexp.MustCompile(`(?s)LastProbeTime:\s*([\d\-]*\s[\d\:\.]*\s[\+\d]*\sUTC)`)
-
 	c := &Collector{
 		kubeClient: clientset,
 		mu:         &sync.Mutex{},
-		regex:      rx,
 	}
 
 	return c
@@ -99,20 +111,18 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	cmData := cm.Data["status"]
 
-	cw := c.regex.FindAllStringSubmatch(cmData, 3)
-	// nil means there's no regex match on the returned data,
-	// for example the configmap is still in initialized phase
-	if cw == nil {
-		log.Info().Msg("Can't match regex pattern on the returned data")
-		log.Debug().Msgf("Received configmap status %s, regex pattern is %s", cmData, c.regex.String())
-		scrapeError.Set(1)
+	var status Status
+	err = yaml.Unmarshal([]byte(cmData), &status)
+	if err != nil {
+		log.Info().Msg("Failed to unmarshal YAML data")
+		log.Debug().Msgf("Received configmap status %s", cmData)
 		return
 	}
 
 	res := map[string]string{
-		"main":      cw[0][1],
-		"scaleUp":   cw[1][1],
-		"scaleDown": cw[2][1],
+		"main":      status.ClusterWide.Health.LastProbeTime,
+		"scaleUp":   status.ClusterWide.ScaleUp.LastProbeTime,
+		"scaleDown": status.ClusterWide.ScaleDown.LastProbeTime,
 	}
 
 	if len(res) != 3 {
@@ -121,7 +131,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 
-	dateLayout := "2006-01-02 15:04:05 -0700 MST"
+	dateLayout := "2006-01-02T15:04:05.999999999Z"
 
 	for act, val := range res {
 		activityTime, err := time.Parse(dateLayout, val)
