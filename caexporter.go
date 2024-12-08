@@ -112,10 +112,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	cmData := cm.Data["status"]
 
 	var status Status
-	err = yaml.Unmarshal([]byte(cmData), &status)
-	if err != nil {
+
+	if err := yaml.Unmarshal([]byte(cmData), &status); err != nil {
 		log.Info().Msg("Failed to unmarshal YAML data")
 		log.Debug().Msgf("Received configmap status %s", cmData)
+		scrapeError.Set(1)
 		return
 	}
 
